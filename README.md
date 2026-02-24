@@ -11,9 +11,23 @@ This example uses [Next.js](https://nextjs.org/) as the frontend framework, and
 npm i
 ```
 
-2. Write circuits in `./circuits/src`.
+2. Install a matching Noir toolchain:
 
-3. Create the verifier contract
+```bash
+noirup -v 1.0.0-beta.19
+```
+
+3. Write circuits in `./circuits/src`.
+
+4. Compile the circuit artifact used by NoirJS:
+
+```bash
+cd circuits
+nargo compile
+cd ..
+```
+
+5. Create the verifier contract
 
 Although the `npm build` already generates and compiles the circuits before deploying, you can
 manually create the Solidity verifier contract:
@@ -27,7 +41,7 @@ manually create the Solidity verifier contract:
 npx ts-node scripts/genContract.ts
 ```
 
-4. Create proofs
+6. Create proofs
 
 **Natively**
 
@@ -37,7 +51,7 @@ In `./circuits`:
 - Populate the inputs in `Prover.toml`
 - Generate proof with `nargo prove <proof_name>`
 
-5. Verify proofs
+7. Verify proofs
 
 **Natively**
 
@@ -45,7 +59,7 @@ In `./circuits`:
 
 - Verify proof with `nargo verify <proof_name>`
 
-6. Deploy
+8. Deploy
 
 - Start a local development EVM at <http://localhost:8545>, for example with `npx hardhat node`.
 - Copy `./.env.example` to `./.env` and add keys for alchemy (to act as a node) and the deployer's

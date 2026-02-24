@@ -1,50 +1,35 @@
-import initNoirWasm, { acir_read_bytes, compile } from '@noir-lang/noir_wasm';
-// @ts-ignore
-import { initialiseResolver } from '@noir-lang/noir-source-resolver';
-// @ts-ignore
-import { setup_generic_prover_and_verifier } from '@noir-lang/barretenberg';
 import path from 'path';
 import fs from 'fs';
 import { Noir } from './noir';
 
 export class NoirServer extends Noir {
+  private projectRoot = path.join(__dirname, '../../');
+  private targetDir = path.join(this.projectRoot, 'circuits/target');
+  private circuitArtifactPath = path.join(this.targetDir, 'circuits.json');
+
   async compile() {
-    initialiseResolver((id: any) => {
-      try {
-        const code = fs.readFileSync(`circuits/src/${id}`, { encoding: 'utf8' }) as string;
-        return code;
-      } catch (err) {
-        console.error(err);
-        throw err;
-      }
-    });
-
-    const compiled_noir = compile({
-      entry_point: 'main.nr',
-    });
-    this.compiled = compiled_noir;
-
-    this.acir = acir_read_bytes(this.compiled.circuit);
-
-    [this.prover, this.verifier] = await setup_generic_prover_and_verifier(this.acir);
+    if (!fs.existsSync(this.circuitArtifactPath)) {
+      throw new Error('Circuit artifact missing at circuits/target/circuits.json. Run `nargo compile` in circuits/ first.');
+    }
+    const circuit = JSON.parse(fs.readFileSync(this.circuitArtifactPath, { encoding: 'utf8' }));
+    await this.init(circuit);
   }
 
-  getSmartContract() {
-    const sc = this.verifier.SmartContract();
-
-    if (!fs.existsSync(path.join(__dirname, '../../contract'))) {
+  async generateVerifierContract() {
+    const contractDir = path.join(this.projectRoot, 'contract');
+    if (!fs.existsSync(contractDir)) {
       console.log('Contract folder does not exist. Creating...');
-      fs.mkdirSync(path.join(__dirname, '../../contract'));
+      fs.mkdirSync(contractDir, { recursive: true });
     }
 
-    if (fs.existsSync(path.join(__dirname, '../../contract/plonk_vk.sol'))) {
-      fs.unlinkSync(path.join(__dirname, '../../contract/plonk_vk.sol'));
+    const verifierContractPath = path.join(contractDir, 'plonk_vk.sol');
+    if (fs.existsSync(verifierContractPath)) {
+      fs.unlinkSync(verifierContractPath);
     }
 
-    fs.writeFileSync(path.join(__dirname, '../../contract/plonk_vk.sol'), sc, {
-      flag: 'w',
-    });
+    const solidityVerifier = await this.backend.getSolidityVerifier();
+    fs.writeFileSync(verifierContractPath, solidityVerifier, { encoding: 'utf8', flag: 'w' });
 
-    return sc;
+    return verifierContractPath;
   }
 }
