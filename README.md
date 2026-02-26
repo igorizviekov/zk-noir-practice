@@ -1,3 +1,7 @@
+### Vercel
+
+https://zk-noir-practice-17ws.vercel.app/
+
 ### Circuit
 
 The circuit in `./circuits/src/main.nr` proves Merkle membership over a depth-4 tree:
