@@ -4,11 +4,6 @@ import { toast } from 'react-toastify';
 import Ethers from '../utils/ethers';
 import { useProofRound } from '../hooks/useProofRound';
 
-type GeneratedProof = {
-  proof?: unknown;
-  publicInputs?: string[];
-};
-
 type WorkerErrorPayload = {
   error: true;
   message: string;
@@ -29,9 +24,11 @@ type ProofBenchmarks = {
   proveMs: number;
 };
 
+type PartialProofBenchmarks = Partial<ProofBenchmarks>;
+
 type WorkerSuccessPayload = {
   proofData: unknown;
-  benchmarks: ProofBenchmarks;
+  benchmarks?: PartialProofBenchmarks;
 };
 
 const BENCH_GROUP_STYLES = {
@@ -47,33 +44,32 @@ const isWorkerErrorPayload = (value: unknown): value is WorkerErrorPayload =>
     if (!('benchmarks' in record) || !record.benchmarks) return true;
     if (record.benchmarks === null || typeof record.benchmarks !== 'object') return false;
     const benchmarks = record.benchmarks as Record<string, unknown>;
+    const optionalNumberFields = ['inputBuildMs', 'compileMs', 'witnessMs', 'proveMs'] as const;
     return (
       typeof benchmarks.failedStage === 'string' &&
       typeof benchmarks.elapsedMs === 'number' &&
-      (!('inputBuildMs' in benchmarks) || typeof benchmarks.inputBuildMs === 'number') &&
-      (!('compileMs' in benchmarks) || typeof benchmarks.compileMs === 'number') &&
-      (!('witnessMs' in benchmarks) || typeof benchmarks.witnessMs === 'number') &&
-      (!('proveMs' in benchmarks) || typeof benchmarks.proveMs === 'number')
+      optionalNumberFields.every(key => !(key in benchmarks) || typeof benchmarks[key] === 'number')
     );
   })();
 
-const isProofBenchmarks = (value: unknown): value is ProofBenchmarks =>
+const isProofBenchmarks = (value: unknown): value is PartialProofBenchmarks =>
   (() => {
     if (value === null || typeof value !== 'object') return false;
     const record = value as Record<string, unknown>;
-    return (
-      typeof record.inputBuildMs === 'number' &&
-      typeof record.compileMs === 'number' &&
-      typeof record.witnessMs === 'number' &&
-      typeof record.proveMs === 'number'
-    );
+    const optionalNumberFields = ['inputBuildMs', 'compileMs', 'witnessMs', 'proveMs'] as const;
+    return optionalNumberFields.every(key => !(key in record) || typeof record[key] === 'number');
   })();
 
 const isWorkerSuccessPayload = (value: unknown): value is WorkerSuccessPayload =>
   (() => {
     if (value === null || typeof value !== 'object') return false;
     const record = value as Record<string, unknown>;
-    return 'proofData' in record && isProofBenchmarks(record.benchmarks);
+    return (
+      'proofData' in record &&
+      (!('benchmarks' in record) ||
+        record.benchmarks === undefined ||
+        isProofBenchmarks(record.benchmarks))
+    );
   })();
 
 const getPublicInputs = (value: unknown): string[] => {
@@ -109,11 +105,22 @@ const STAGE_ORDER: Record<string, number> = {
   proof_generation: 3,
 };
 
+const PIPELINE_STAGES: Array<{
+  order: number;
+  label: string;
+  key: keyof ProofBenchmarks;
+}> = [
+  { order: 0, label: '[ZK:Worker][InputBuild] buildNoirInput()', key: 'inputBuildMs' },
+  { order: 1, label: '[ZK:Worker][Compile] noir.compile()', key: 'compileMs' },
+  { order: 2, label: '[ZK:Worker][WitnessBuild] noir.execute()', key: 'witnessMs' },
+  { order: 3, label: '[ZK:Worker][ProofGen] backend.generateProof()', key: 'proveMs' },
+];
+
 const formatMs = (value: number) => `${value.toFixed(2)} ms`;
 
 const logPipelineLines = (params: {
   path: 'success' | 'failure';
-  workerBenchmarks?: Partial<ProofBenchmarks> & { failedStage?: string; elapsedMs?: number };
+  workerBenchmarks?: PartialProofBenchmarks & { failedStage?: string; elapsedMs?: number };
   onchainVerifyMs?: number;
   onchainStatus: 'ok' | 'failed' | 'skipped';
 }) => {
@@ -124,45 +131,29 @@ const logPipelineLines = (params: {
     path === 'failure' && failedStage && failedStage in STAGE_ORDER
       ? STAGE_ORDER[failedStage]
       : Number.POSITIVE_INFINITY;
-  const stageValue = (order: number, ms?: number) => {
-    if (path === 'success') {
+
+  const formatStageValue = (order: number, ms?: number) => {
+    if (path === 'success' || order < failedOrder) {
       return typeof ms === 'number' ? formatMs(ms) : 'n/a';
     }
-    if (order < failedOrder) {
-      return typeof ms === 'number' ? formatMs(ms) : 'n/a';
-    }
-    if (order > failedOrder) {
-      return 'skipped';
-    }
-    if (typeof ms === 'number') {
-      return `failed at ${formatMs(ms)}`;
-    }
-    if (typeof elapsedMs === 'number') {
-      return `failed by ${formatMs(elapsedMs)}`;
-    }
+    if (order > failedOrder) return 'skipped';
+    if (typeof ms === 'number') return `failed at ${formatMs(ms)}`;
+    if (typeof elapsedMs === 'number') return `failed by ${formatMs(elapsedMs)}`;
     return 'failed';
   };
 
-  console.log(
-    `[ZK:Worker][InputBuild] buildNoirInput(): ${stageValue(0, workerBenchmarks?.inputBuildMs)}`,
-  );
-  console.log(`[ZK:Worker][Compile] noir.compile(): ${stageValue(1, workerBenchmarks?.compileMs)}`);
-  console.log(
-    `[ZK:Worker][WitnessBuild] noir.execute(): ${stageValue(2, workerBenchmarks?.witnessMs)}`,
-  );
-  console.log(
-    `[ZK:Worker][ProofGen] backend.generateProof(): ${stageValue(3, workerBenchmarks?.proveMs)}`,
-  );
+  PIPELINE_STAGES.forEach(stage => {
+    console.log(`${stage.label}: ${formatStageValue(stage.order, workerBenchmarks?.[stage.key])}`);
+  });
 
-  if (onchainStatus === 'ok' && typeof onchainVerifyMs === 'number') {
-    console.log(`[ZK:OnChain][VerifyCall] contract.verify(): ${formatMs(onchainVerifyMs)}`);
-  } else if (onchainStatus === 'failed' && typeof onchainVerifyMs === 'number') {
-    console.log(
-      `[ZK:OnChain][VerifyCall] contract.verify(): failed at ${formatMs(onchainVerifyMs)}`,
-    );
-  } else {
-    console.log('[ZK:OnChain][VerifyCall] contract.verify(): skipped');
-  }
+  const onchainText =
+    onchainStatus === 'ok' && typeof onchainVerifyMs === 'number'
+      ? formatMs(onchainVerifyMs)
+      : onchainStatus === 'failed' && typeof onchainVerifyMs === 'number'
+      ? `failed at ${formatMs(onchainVerifyMs)}`
+      : 'skipped';
+
+  console.log(`[ZK:OnChain][VerifyCall] contract.verify(): ${onchainText}`);
 };
 
 function Component() {
@@ -180,7 +171,7 @@ function Component() {
     }
   };
 
-  const verifyProof = async (proofData: unknown, workerBenchmarks?: ProofBenchmarks) => {
+  const verifyProof = async (proofData: unknown, workerBenchmarks?: PartialProofBenchmarks) => {
     const onchainVerifyStart = performance.now();
     try {
       const ethers = new Ethers();
@@ -246,7 +237,10 @@ function Component() {
         setPending(false);
         resetRound();
         if (isWorkerSuccessPayload(workerResult)) {
-          await verifyProof(workerResult.proofData, workerResult.benchmarks);
+          await verifyProof(
+            workerResult.proofData,
+            isProofBenchmarks(workerResult.benchmarks) ? workerResult.benchmarks : undefined,
+          );
         } else {
           await verifyProof(workerResult);
         }
@@ -268,8 +262,8 @@ function Component() {
   }, []);
 
   return (
-    <div className="flex flex-col items-center font-mono ">
-      <div className="p-14 mt-24 mb-10 border-2 border-black text-center bg-white shadow-2xl">
+    <div className="flex flex-col items-center font-mono w-full px-2 sm:px-4">
+      <div className="w-full max-w-4xl p-6 sm:p-10 md:p-14 mt-24 mb-10 border-2 border-black text-center bg-white shadow-2xl overflow-hidden">
         <div>
           <h1 className="text-3xl font-bold">ZK proof with Noir</h1>
           <h2 className="text-xl py-5">
@@ -278,10 +272,10 @@ function Component() {
           </h2>
         </div>
 
-        <div className="flex flex-row flex-wrap gap-10 pt-10 items-start">
+        <div className="flex flex-row flex-wrap gap-10 pt-10 items-start justify-center">
           <div className="w-full md:w-[360px] text-left">
             <label className="block text-sm font-semibold mb-2" htmlFor="name-input">
-              Your input
+              Your name
             </label>
             <input
               id="name-input"
@@ -293,14 +287,13 @@ function Component() {
               value={input}
               placeholder="Type a name"
             />
-            <p className="text-xs text-gray-600 mt-2">{maxNameLength} characters maximum</p>
           </div>
 
-          <div className="w-full md:w-[240px] text-left">
-            <p className="text-sm font-semibold mb-2">Names ({nameOptions.length})</p>
-            <ul className="bg-gray-100 rounded p-3 space-y-2">
+          <div className="w-full md:w-[240px] text-left min-w-0 max-w-full">
+            <p className="text-sm font-semibold mb-2">Valid names ({nameOptions.length})</p>
+            <ul className="w-full max-w-full bg-gray-100 rounded p-3 space-y-2 max-h-64 overflow-y-auto overflow-x-hidden">
               {nameOptions.map(name => (
-                <li className="text-lg" key={name}>
+                <li className="text-lg break-all" key={name}>
                   {name}
                 </li>
               ))}
@@ -308,14 +301,14 @@ function Component() {
           </div>
         </div>
         <div className="flex justify-center h-24 ">
-          {pending && <ThreeDots wrapperClass="spinner" color="#000000" height={100} width={100} />}
+          {pending && <ThreeDots wrapperClass="spinner" color="#a855f7" height={100} width={100} />}
         </div>
         <div className="w-full pb-5">
           <button
-            className="text-white shadow-3xl py-3 w-[80%] bg-gradient-to-r from-neutral-950 via-indigo-950 to-purple-900 hover:bg-gradient-to-l"
+            className="text-white shadow-3xl py-3 w-[80%] bg-gradient-to-r from-neutral-950 via-indigo-950 to-purple-900 transform transition-all duration-700 ease-out hover:scale-[1.02] hover:brightness-125 hover:shadow-[0_0_24px_rgba(168,85,247,0.55)] hover:bg-gradient-to-r hover:from-indigo-700 hover:via-purple-600 hover:to-pink-500"
             onClick={calculateProof}
           >
-            Calculate proof
+            Verify
           </button>
         </div>
       </div>
