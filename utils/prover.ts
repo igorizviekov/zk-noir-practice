@@ -1,6 +1,4 @@
-// @ts-ignore
 import { NoirBrowser } from '../utils/noir/noirBrowser';
-// @ts-ignore
 import { poseidon2 } from 'poseidon-lite/poseidon2';
 
 const TREE_DEPTH = 4;
@@ -8,6 +6,27 @@ const TREE_LEAF_COUNT = 1 << TREE_DEPTH;
 const MAX_NAME_LENGTH = 31;
 const FIELD_MODULUS =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+type WorkerRequest = {
+  input: string;
+  nameOptions: string[];
+};
+
+type NoirInput = {
+  user_value: string;
+  merkle_root: string;
+  sibling_path: string[];
+  path_indices: boolean[];
+};
+
+type FailureBenchmarks = {
+  failedStage: string;
+  elapsedMs: number;
+  inputBuildMs?: number;
+  compileMs?: number;
+  witnessMs?: number;
+  proveMs?: number;
+};
 
 const normalizeName = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
 
@@ -70,24 +89,30 @@ const buildMerkleProof = (levels: bigint[][], leafIndex: number) => {
 
 const validateWorkerInput = (input: string, nameOptions: string[]) => {
   const normalizedInput = normalizeName(input);
-  if (normalizedInput.length === 0) {
-    throw new Error('Name can not be empty.');
-  }
-
   if (normalizedInput.length > MAX_NAME_LENGTH) {
     throw new Error(`Name must be ${MAX_NAME_LENGTH} characters max.`);
   }
 
-  if (!/^[a-z ]+$/.test(normalizedInput)) {
-    throw new Error('Only letters and spaces are allowed.');
-  }
-
   if (nameOptions.length < 2 || nameOptions.length > TREE_LEAF_COUNT) {
-    throw new Error('Invalid number of options.');
+    throw new Error('validateWorkerInput: Invalid number of options.');
   }
 };
 
-const buildNoirInput = (input: string, nameOptions: string[]) => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object';
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+
+const parseWorkerRequest = (value: unknown): WorkerRequest => {
+  if (!isRecord(value) || typeof value.input !== 'string' || !isStringArray(value.nameOptions)) {
+    throw new Error('Invalid worker input payload.');
+  }
+
+  return { input: value.input, nameOptions: value.nameOptions };
+};
+
+const buildNoirInput = (input: string, nameOptions: string[]): NoirInput => {
   validateWorkerInput(input, nameOptions);
 
   const encodedUserValue = encodeToField(input);
@@ -100,10 +125,8 @@ const buildNoirInput = (input: string, nameOptions: string[]) => {
   const merkleLevels = buildMerkleLevels(paddedLeaves);
   const merkleRoot = merkleLevels[TREE_DEPTH][0];
   const leafIndex = encodedOptionValues.findIndex(option => option === encodedUserValue);
-  if (leafIndex < 0) {
-    throw new Error('Input is not in the current name options.');
-  }
-  const merkleProof = buildMerkleProof(merkleLevels, leafIndex);
+  const proofLeafIndex = leafIndex >= 0 ? leafIndex : 0;
+  const merkleProof = buildMerkleProof(merkleLevels, proofLeafIndex);
 
   return {
     user_value: toFieldHex(encodedUserValue),
@@ -113,48 +136,58 @@ const buildNoirInput = (input: string, nameOptions: string[]) => {
   };
 };
 
-onmessage = async event => {
+onmessage = async (event: MessageEvent<unknown>) => {
+  const startedAt = performance.now();
+  let failedStage = 'worker_init';
+  let inputBuildMs: number | undefined;
+  let compileMs: number | undefined;
   try {
-    const { input, nameOptions } = event.data as { input: string; nameOptions: string[] };
-    const proofInput = buildNoirInput(input, nameOptions);
-    const isHexField = (value: unknown): value is string =>
-      typeof value === 'string' && /^0x[0-9a-f]+$/i.test(value);
+    failedStage = 'request_parse';
+    const { input, nameOptions } = parseWorkerRequest(event.data);
+    failedStage = 'input_build';
+    const inputBuildStart = performance.now();
+    const noirInput = buildNoirInput(input, nameOptions);
+    inputBuildMs = performance.now() - inputBuildStart;
 
-    const normalizeNoirValue = (value: unknown, key: string): string | string[] | boolean | boolean[] => {
-      if (Array.isArray(value)) {
-        if (value.every(item => typeof item === 'boolean')) {
-          return value as boolean[];
-        }
-        if (value.every(item => isHexField(item))) {
-          return value as string[];
-        }
-        throw new Error(`Invalid array encoding for ${key}`);
-      }
-
-      if (typeof value === 'boolean') {
-        return value;
-      }
-
-      if (!isHexField(value)) {
-        throw new Error(`Invalid field encoding for ${key}`);
-      }
-
-      return value;
-    };
-
-    const noirInput = Object.entries(proofInput).reduce((newObj, [key, value]) => {
-      newObj[key] = normalizeNoirValue(value, key);
-      return newObj;
-    }, {} as Record<string, string | string[] | boolean | boolean[]>);
-
+    failedStage = 'circuit_compile';
     const noir = new NoirBrowser();
+    const compileStart = performance.now();
     await noir.compile();
-    const proof = await noir.createProof({ input: noirInput });
-    postMessage(proof);
+    compileMs = performance.now() - compileStart;
+    failedStage = 'proof_generation';
+    const proofResult = await noir.createProof({ input: noirInput });
+    const { proof, witnessMs, proveMs } = proofResult;
+    postMessage({
+      proofData: proof,
+      benchmarks: {
+        inputBuildMs,
+        compileMs,
+        witnessMs,
+        proveMs,
+      },
+    });
   } catch (er) {
-    console.log(er);
     const message = er instanceof Error ? er.message : 'Unknown proof generation error';
-    postMessage({ error: true, message });
+    const benchmarks: FailureBenchmarks = {
+      failedStage,
+      elapsedMs: performance.now() - startedAt,
+      inputBuildMs,
+      compileMs,
+    };
+    if (isRecord(er) && isRecord(er.benchmark)) {
+      const benchmark = er.benchmark;
+      if (typeof benchmark.failedStage === 'string') {
+        failedStage = benchmark.failedStage;
+        benchmarks.failedStage = benchmark.failedStage;
+      }
+      if (typeof benchmark.witnessMs === 'number') {
+        benchmarks.witnessMs = benchmark.witnessMs;
+      }
+      if (typeof benchmark.proveMs === 'number') {
+        benchmarks.proveMs = benchmark.proveMs;
+      }
+    }
+    postMessage({ error: true, message, benchmarks });
   } finally {
     close();
   }
