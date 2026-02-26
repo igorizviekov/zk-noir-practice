@@ -1,9 +1,56 @@
 # Noir with Nextjs and Hardhat
 
-This example uses [Next.js](https://nextjs.org/) as the frontend framework, and
-[Hardhat](https://hardhat.org/) to deploy.
+## Circuit and Web App Flow
+
+### What the circuit proves
+
+The circuit in `./circuits/src/main.nr` proves Merkle membership over a depth-4 tree:
+
+- private inputs:
+  - `user_value: Field`
+  - `sibling_path: [Field; 4]`
+  - `path_indices: [bool; 4]`
+- public input:
+  - `merkle_root: Field`
+
+Circuit logic:
+
+1. It first enforces `assert(user_value != 0)` to reject the padded zero leaf case.
+2. It computes the leaf as Poseidon hash of `[user_value, 0]`.
+3. It converts `path_indices` (little-endian bits) into the leaf index.
+4. It recomputes the Merkle root from the leaf + sibling path.
+5. It asserts recomputed root equals the public `merkle_root`.
+
+If all constraints pass, the prover has shown they know a value whose leaf exists in the committed
+Merkle tree, without revealing which leaf.
+
+### How it works with the web app
+
+The app-side flow is:
+
+1. `components/component.tsx` displays random name options and user input.
+2. On "Calculate proof", the UI starts a Web Worker from `utils/prover.ts`.
+3. The worker:
+   - normalizes/validates input,
+   - encodes names to field elements,
+   - builds a depth-4 Poseidon Merkle tree in JS,
+   - finds the matching leaf index (throws if input is not in options),
+   - generates `sibling_path`, `path_indices`, and `merkle_root`,
+   - compiles the Noir artifact and creates a proof with NoirJS + bb.js.
+4. The worker returns either:
+   - proof payload, or
+   - `{ error: true, message }` (serializable error payload).
+5. The UI receives the result and calls the deployed verifier contract via ethers.
+6. Contract verification uses the generated proof and public inputs (`merkle_root`), then the UI
+   displays success/failure toast notifications.
+
+In short: the browser builds a private witness and ZK proof, while on-chain verification only checks
+the proof against public inputs and never sees the secret user value.
 
 ## Getting Started
+
+This example uses [Next.js](https://nextjs.org/) as the frontend framework, and
+[Hardhat](https://hardhat.org/) to deploy.
 
 1. Install dependencies with
 
@@ -66,12 +113,3 @@ In `./circuits`:
   private key. Make sure you have funds in this account.
 - Run `NETWORK=localhost npm build` to build the project and deploy contracts to the local
   development chain
-
-## Estimate gas
-
-There is a [script](./scripts/verificationGas.ts) to easily check how much gas ethers estimates a
-call to the `verify` function will cost.
-
-```sh
-npm run verify_gas
-```
