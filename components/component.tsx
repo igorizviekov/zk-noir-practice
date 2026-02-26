@@ -211,6 +211,8 @@ function Component() {
   };
 
   const calculateProof = async () => {
+    if (pending) return;
+
     if (nameOptions.length < 2 || nameOptions.length > maxOptions) {
       toast.error('Name options are not ready yet. Try again.');
       return;
@@ -234,8 +236,6 @@ function Component() {
         setPending(false);
         resetRound();
       } else {
-        setPending(false);
-        resetRound();
         if (isWorkerSuccessPayload(workerResult)) {
           await verifyProof(
             workerResult.proofData,
@@ -244,6 +244,8 @@ function Component() {
         } else {
           await verifyProof(workerResult);
         }
+        setPending(false);
+        resetRound();
       }
       worker.terminate();
     };
@@ -305,8 +307,9 @@ function Component() {
         </div>
         <div className="w-full pb-5">
           <button
-            className="text-white shadow-3xl py-3 w-[80%] bg-gradient-to-r from-neutral-950 via-indigo-950 to-purple-900 transform transition-all duration-700 ease-out hover:scale-[1.02] hover:brightness-125 hover:shadow-[0_0_24px_rgba(168,85,247,0.55)] hover:bg-gradient-to-r hover:from-indigo-700 hover:via-purple-600 hover:to-pink-500"
+            className="text-white shadow-3xl py-3 w-[80%] bg-gradient-to-r from-neutral-950 via-indigo-950 to-purple-900 transform transition-all duration-700 ease-out hover:scale-[1.02] hover:brightness-125 hover:shadow-[0_0_24px_rgba(168,85,247,0.55)] hover:bg-gradient-to-r hover:from-indigo-700 hover:via-purple-600 hover:to-pink-500 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:brightness-100 disabled:hover:shadow-none disabled:hover:from-neutral-950 disabled:hover:via-indigo-950 disabled:hover:to-purple-900"
             onClick={calculateProof}
+            disabled={pending}
           >
             Verify
           </button>
