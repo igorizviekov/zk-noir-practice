@@ -4,6 +4,7 @@
   "description": "Zero knowledge program with Noir lang.",
   "scripts": {
     "dev": "next dev --webpack",
+    "build:fe": "next build --webpack",
     "build": "npm run deploy && next build --webpack",
     "deploy": "hardhat run scripts/genContract.ts && hardhat compile && hardhat run --network ${NETWORK} scripts/deploy.ts",
     "test": "hardhat test",
