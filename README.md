@@ -1,5 +1,3 @@
-## Circuit and Web App Flow
-
 ### Circuit
 
 The circuit in `./circuits/src/main.nr` proves Merkle membership over a depth-4 tree:
