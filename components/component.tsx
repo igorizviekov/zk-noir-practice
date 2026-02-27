@@ -277,11 +277,32 @@ function Component() {
     <div className="flex flex-col items-center font-mono w-full px-2 sm:px-4">
       <div className="w-full max-w-4xl p-6 sm:p-10 md:p-14 mt-24 mb-10 border-2 border-black text-center bg-white shadow-2xl overflow-hidden">
         <div>
-          <h1 className="text-3xl font-bold">ZK proof with Noir</h1>
+          <h1 className="text-3xl font-bold">
+            <a
+              href="https://github.com/igorizviekov/zk-noir-practice"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:underline"
+            >
+              ZK proof with Noir
+            </a>
+          </h1>
           <h2 className="text-xl py-5">
             This app checks whether the entered input is in the current random list, and confirms it
             without revealing the input to the blockchain.
           </h2>
+          <p className="text-sm text-gray-700">
+            Connect a wallet with{' '}
+            <a
+              href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              Sepolia ETH
+            </a>{' '}
+            to verify on-chain.
+          </p>
           {!walletAvailable && (
             <p className="text-sm sm:text-base py-1 text-red-600 font-semibold">
               Wallet not found. Setup MetaMask and refresh this page.
